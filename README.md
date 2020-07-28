@@ -7,4 +7,4 @@ We strive to maximise the quality and progress of research in traumatic brain in
 
 To stay up to date with our research, please  
 visit https://www.tbiresearch.co.uk/ or   
-follow @DrSophieRichter and @vfjn2 on twitter
+follow twitter.com/DrSophieRichter and twitter.com/vfjn2
