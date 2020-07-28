@@ -1,0 +1,763 @@
+---
+title: "Attrition paper"
+author: "Sophie Richter"
+date: "11 October 2019"
+output: html_document
+---
+This is the code for our paper:  
+Richter, S., Stevenson, S., Newman, T., Wilson, L., Maas, A.I.R., Nieboer, D., Lingsma, H., Steyerberg, E., Newcombe, V., 2020. Study Design Features Associated with Patient Attrition in Studies of Traumatic Brain Injury — A Systematic Review 1–11. https://doi.org/10.1089/neu.2020.7000
+
+# Data preparation 
+
+```{r libraries, results='hide', message=FALSE, warning=FALSE}
+#loading required libraries
+library(magrittr)
+library(naniar)
+library(MASS)
+library(dplyr)
+library(forcats)
+library(knitr)
+library(kableExtra)
+library(tidyr)
+```
+
+Load data
+```{r}
+#data collected for original review on the handling of missing data
+handling.df      <- read.csv("mt.df_20180726.csv") 
+#exclude study number 198 due to heterogeneous methodology
+handling.df <- subset(handling.df, ID != 198)
+#exclude studies that did not clearly report whether or not outcome data was missing
+handling.df <- subset(handling.df, Report != "apparently complete data")
+
+#additional data collected for this paper on study design features
+design.df <- read.csv("Raw_slim_attrition_20190611.csv") #multiple design features
+hdi.df <- read.csv("phready.df.csv") #feature: human development index
+engage.df <- read.csv("BaseEffort_20190611.csv")# feature: Non-clinical engagement
+gose.df <- read.csv("GOS_20190718.csv")#feature: method of GOSE collection
+
+#combine data into a master dataframe
+df <- merge(handling.df, design.df, 
+            by = c("ID", "Author", "Year", "Reviewer"))
+df <- merge(df, hdi.df, by = "ID", all.x = TRUE, all.y = FALSE)
+df <- merge(df, engage.df, by = "ID")
+df <- merge(df, gose.df, by = c("ID", "GOS.assessment"))
+```
+
+Summarizing Age for each study
+```{r}
+#making sure all NA are coded as such
+df$Age_mean <- ifelse(df$Age_mean %in% c("", " ", "not reported", "Not reported"), NA, as.numeric(as.character(df$Age_mean)))
+
+df$Age_median <- ifelse(df$Age_median %in% c("", " ", "not reported", "Not reported"), NA, as.numeric(as.character(df$Age_median)))
+
+#Making a function to convert factor variables to numeric
+fton <- function(factor_variable) {
+  numeric_variable <- as.numeric(as.character(factor_variable))
+  return(numeric_variable)
+}
+
+#Creating a variable Age that contains the mean age if available otherwise median age
+  df$Age <- df %$% 
+  ifelse(is.na(Age_mean), fton(Age_median), fton(Age_mean)) %>%
+  round(0)
+```
+
+Select relevant columns i.e. those that refer to study design features rather than the way in which authors handled missing data statistically
+```{r}
+#select only relevant columns and give them more succinct names
+df <- df %>% 
+  select(ID, # study ID
+         Author, # study author
+         Year, # Year of publication
+         Report,  # whether authors clearly reported if outcome data was missing
+         N, # Number of patients enrolled initially
+         Remaining, # Patients remaining at each follow up timepoint
+         IntObs, # whether the study is interventional or observational
+         RetroPro, # whether data was collected prospectively or retrospectively
+         PrimSec, # whether GOSE was primary or secondary outcome
+         Range, #whether follow up was at discrete timepoints or over a range of time
+         Tpoints, #Total number of follow up timepoints in this study
+         Timepoint = Timepoints, #is this the 1st, 2nd, 3rd, 4th or 5th follow up of this study
+         Time, # time since injury
+         Severity, #TBI injury severity
+         Center, # single vs multicentre design
+         Setting = Patients.were.identified.because.they.attended.were.admitted.to, #recruitment setting
+         Military = Military.Population, # military or civilian cohort
+         Male = Percent_Male, #sex
+         Age, # age
+         Engage =Baseline.or.Follow.up.effort, #level of non-clinical engagement required
+         GOS1 = GOS1, # how GOS was collected (gross categorisation)
+         GOS2 = GOS.assessment, # how GOS was collected (fine categorisation)
+         Proxy = Was.proxy.assessment.accepted., # whether a proxy report of GOS was accepted
+         HDI)
+```
+
+At the moment the data is in the long format i.e. there are several rows for each study. Each row refers to the nth follow-up timepoint for that study. For the purposes of this review, we are only interested in the the maximum number of patients lost by the end study. So we will only select the row referring to the final timepoint for each study and calculate the maximum number of patients lost by that point.
+```{r}
+#Recode Timepoint into a number (currently it's in the format "T1c", "T2c", "T3c" etc)
+df$Timepoint <- gsub("T", "", df$Timepoint)
+df$Timepoint <- gsub("c", "", df$Timepoint)
+df$Timepoint <- as.numeric(df$Timepoint)
+
+#Calculate the maximum number of patients lost in that study
+df <-                           
+  df %>%
+  group_by(ID) %>% 
+  summarise(MaxLost = max(I(N - Remaining), na.rm = TRUE)) %>% 
+  merge(df) 
+
+df$MaxLost <- ifelse(df$MaxLost == "-Inf", NA, as.numeric(df$MaxLost))
+
+df$MinRemain <- df$N - df$MaxLost
+df$MinRemain <- ifelse(df$MinRemain == "-Inf", NA, as.numeric(df$MinRemain))
+
+#keep only one row per study, the one final timepoint
+df <-  df %>% filter(Timepoint == Tpoints)
+```
+
+
+```{r}
+str(df)
+```
+For each design feature, we need to tidy up the levels
+
+```{r}
+#Factorise ID
+df$ID <- as.factor(df$ID)
+
+#Percent_Male needs to be numeric
+df$Male <- as.numeric(df$Male)
+
+
+#RetroPro
+df$RetroPro <-
+  fct_collapse(df$RetroPro,
+             Prospective = "Prospective",
+             Retrospective = c("Both", "Retrospective AND prospective", "Retrospective"))
+summary(df$RetroPro)%>% as.data.frame()
+
+
+#Range
+df$Range <- 
+  fct_collapse(df$Range,
+             no = c("", "no"),
+             yes = "yes")
+summary(df$Range)%>% as.data.frame()
+
+
+#Severity
+df <- df %>% replace_with_na(replace = list(Severity = "not reported"))
+df$Severity <- factor(df$Severity) #removes redundant level
+df$Severity <-
+  fct_collapse(df$Severity,
+             Moderate_to_severe = "moderate and severe",
+             Mixed = c("all", "Mild and severe"),
+             Mild = "mild only",
+             Severe = "severe only")
+summary(df$Severity)%>% as.data.frame()
+
+
+#Center
+df<- df %>% replace_with_na(replace = list(Center = ""))
+df$Center <- factor(df$Center)
+summary(df$Center)
+
+
+#Setting
+df<- df %>% replace_with_na(replace = list(Setting = c("", 
+                                                       "Unclear", 
+                                                       "Other", 
+                                                       "Registry")))
+df$Setting <- factor(df$Setting)
+df$Setting <- 
+  fct_collapse(df$Setting,
+             Hyperacute = c("ED", "Pre-hospital"),
+             Acute = c("ED, Ward or ICU", "ICU", "Ward or ICU", "ED or ICU"),
+             Subacute = c("outpatient clinic", "Inpatient Rehab"))
+summary(df$Setting) %>% as.data.frame()
+
+
+#Engage
+df$Engage <- factor(df$Engage, 
+                       levels = c("NEITHER", "Baseline", "Follow-up","Both"), 
+                       labels = c("none", "Baseline only", "Follow-up only", "Baseline and follow-up"))
+summary(df$Engage) %>% as.data.frame()
+
+
+#GOSE_how
+df$GOS_how <- ifelse(df$GOS1 == "In person", "Exclusively in person", 
+                     ifelse(df$GOS1 %in% c("In person or medical records", 
+                                             "Mail or in person", 
+                                             "Phone or in person", 
+                                             "Phone or Mail or in person"), "Partially in person",
+                            ifelse(df$GOS2 == "Not reported", NA, "Not in person")))
+df$GOS_how <- factor(df$GOS_how, 
+                       levels = c("Exclusively in person", "Partially in person", "Not in person"),
+                       labels = c("Exclusively in person", "Partially in person", "Not in person"))
+summary(df$GOS_how) %>% as.data.frame()
+df <- df %>% select(-GOS1, -GOS2)
+
+
+#Proxy
+df<- df %>% replace_with_na(replace = list(Proxy = c("", 
+                                                     "not reported", 
+                                                     "Not reported",
+                                                     "Not Reported",  
+                                                     "Unclear")))
+df$Proxy <- factor(df$Proxy)
+summary(df$Proxy)
+
+
+#Military
+df$Military <- as.factor(df$Military)
+df$Military <- droplevels(df$Military)
+summary(df$Military)
+```
+
+# Make Table one
+```{r}
+library(tableone)
+t1 <- df
+t1$Perc <- (df$MaxLost/df$N) *100
+t1 <- t1 %>% select(Perc, 
+                    N, 
+                    Time, 
+                    Tpoints, 
+                    Male,
+                    Age,
+                    Severity,
+                    Military,
+                    Center,
+                    HDI,
+                    Setting,
+                    Engage,
+                    PrimSec,
+                    RetroPro,
+                    Range, 
+                    GOS_how,
+                    Proxy, 
+                    IntObs)
+
+#Renaming the variables to something that looks good in the table 
+names(t1) <- c("Percentage attrition by end of study",
+            "Number of patients initially enrolled",
+            "Study duration (months)",
+            "Number of follow-up timepoints",
+            "Male sex",
+            "Age",
+            "Injury severity based on GCS",
+            "Military population",
+            "Single-center (versus multi-center)",
+            "Human development index of recruiting country",
+            "Recruitment setting",
+            "Non-routine clinical engagement",
+            "GOS/GOSE as secondary (versus primary) outcome",
+            "Prospective (versus retrospective) collection of outcome data",
+            "Follow up at non-discrete timepoints",
+            "Method for collecting GOS/GOSE outcome",
+            "Proxy report of outcome was accepted",
+            "Observational (versus interventional) design")
+myvars <-  names(t1)[-length(names(t1))]
+
+tab <- CreateTableOne(data = t1, vars = myvars, 
+                      strata = "Observational (versus interventional) design")
+#Storing the output as t1
+t1 <- print(tab, 
+      nonnormal = myvars, 
+      test = F, 
+      varlabels = T, 
+      noSpaces = F, 
+      printToggle = T,
+      missing = T,
+      contDigits = 2, 
+      minMax = F,
+      catDigits = 0,
+      quote = F,
+      explain = F, 
+      dropEqual = T)
+
+#making a pretty html version
+t1 <- t1 %>% as.data.frame()
+rownames(t1) <- gsub("\\.", " ", rownames(t1))
+rownames(t1) <- gsub("X", " ", rownames(t1))
+t1$Missing <- as.numeric(as.character(t1$Missing)) %>% round(0) %>% replace_na("")
+colnames(t1) <- c( "Median [IQR] or Frequency (%)",  "Median [IQR] or Frequency (%)", "Percent of 148 studies")
+t1 %>%
+  kable(escape = FALSE) %>%
+  kable_styling(bootstrap_options = c("condensed", "striped"), full_width = F) %>%
+  add_indent(c( 9:12, 17:19, 21:24, 29:31)) %>%
+  add_header_above(c("Design factor" = 1,"Interventional studies" = 1 ,"Observational studies" = 1,  "Design factor not reported" = 1))
+```
+
+
+# Multiple imputation of missing data
+```{r}
+set.seed(123) #ensure reproducible results
+library(mice)
+```
+
+```{r}
+#Remove excessive variables especially ID
+df <- df %>% select(-ID,
+                    -N,
+                    -Year,
+                    -Author,
+                    -Report,
+                    -Remaining)
+
+#rescale time to 6 months intervals to avoid tiny numbers for the effect size per time unit
+df$Time <- df$Time/6
+
+
+```
+
+
+```{r}
+#Examine the pattern of missing data
+md.pattern(df)
+```
+
+
+```{r}
+#view fluxplot
+fluxplot(df)
+```
+
+
+```{r}
+#Making 1 imputed data set just to set up the methods
+imp <- mice(df, m=1, print = F) 
+#Show method of imputation used for each variable
+imp$meth
+
+```
+
+
+```{r}
+#Change imputation method for continuous variables
+meth <- imp$meth
+meth[c("Age", "Male", "MaxLost", "MinRemain")] <- "midastouch"
+meth
+```
+
+```{r}
+#Run the imputation again
+imp <- mice(df, m= 20, meth = meth, print = F)
+```
+
+
+```{r}
+imp #shows how data was imputed i.e. method and which variables contributed (I used all variables)
+```
+
+
+
+```{r}
+#Check for convergence of imputations
+plot(imp)
+```
+
+
+```{r}
+#Check for plausibility on stripplots
+stripplot(imp)
+```
+
+
+```{r}
+#check for plausibility on density plots
+densityplot(imp)
+```
+# Modelling the data
+
+Visualise the outcome variable
+```{r, include=TRUE}
+hist(df$MaxLost, 100) #Absolute number of patients lost, disregarding study size
+hist(log(df$MaxLost/df$MinRemain), 10) #logit of patients lost to follow up, i.e. considers study size
+```
+Run the model
+```{r, include=TRUE}
+#I am NOT using Proxy (75% missing and likely MNAR) and Military (too few studies are military) in the model
+imputed_model <- with(imp, 
+                      glm(cbind(MaxLost, MinRemain) ~ 
+                Tpoints + 
+                  Time + 
+                  IntObs + 
+                  RetroPro + 
+                  PrimSec + 
+                  Range + 
+                  Severity + 
+                  Center + 
+                  Setting + 
+                  Male + 
+                  Age + 
+                  Engage + 
+                  GOS_how + 
+                  HDI,
+             family = binomial))
+```
+
+Create a results table for model coefficients
+```{r, include=TRUE}
+# log odds scale
+sum <- summary(pool(imputed_model), conf.int = TRUE, exponentiate = TRUE)
+sum[,-1] <- round(sum[,-1], 2)
+sum
+sum$sig <- ifelse(sum$`2.5 %` < 1 & sum$`97.5 %` <1, "*", 
+                  ifelse(sum$`2.5 %` > 1 & sum$`97.5 %` > 1, "*", ""))
+
+#merge columns for confidence interval
+sum$CI <- paste(sum$`2.5 %`, "-", sum$`97.5 %`)
+sum
+#reorder and rename columns
+sum <- sum %>% 
+  select("Design factor" = term,
+                      "Odds ratio" = estimate,
+                      "95% Confidence Interval" = CI,
+         "P-value" = p.value,
+                      "Significant" = sig) 
+
+sum <- sum[-1,] # remove intercepts
+#save a copy for later
+sum_imp <- sum
+
+
+#reorder columns
+myorder <-  c("Tpoints", "Time", "IntObsobservational", 
+              "RetroProRetrospective", "PrimSecSecondary",  "Rangeyes", 
+              "CenterSingle", "Male", "Age",  
+              "HDI" ,"SeverityMild", "SeverityModerate_to_severe", 
+              "SeveritySevere", "SettingAcute", "SettingSubacute",                                               "EngageBaseline only", "EngageFollow-up only", "EngageBaseline and follow-up",
+              "GOS_howPartially in person",   "GOS_howNot in person")         
+sum <- sum %>%
+  mutate(`Design factor` =  factor(`Design factor`, levels = myorder)) %>%
+  arrange(`Design factor`)
+
+#Editing column Design factor
+sum$`Design factor` <- gsub("Tpoints", "Total no. of follow-up timepoints",sum$`Design factor`)
+sum$`Design factor` <- gsub("Time", "Study duration (per 6-months interval)",sum$`Design factor`)
+sum$`Design factor` <- gsub("IntObsobservational", "Observational study (vs interventional)",sum$`Design factor`)
+sum$`Design factor` <- gsub("RetroProProspective", "Prospective study (vs retrospective)",sum$`Design factor`)
+sum$`Design factor` <- gsub("PrimSecSecondary", "GOS as secondary outcome (vs primary)",sum$`Design factor`)
+sum$`Design factor` <- gsub("Rangeyes", "Use of follow-up time window (vs discrete timepoints)",sum$`Design factor`)
+sum$`Design factor` <- gsub("Severity", "",sum$`Design factor`)
+sum$`Design factor` <- gsub("Setting", "",sum$`Design factor`)
+sum$`Design factor` <- gsub("Male", "Percentage of male patients",sum$`Design factor`)
+sum$`Design factor` <- gsub("Age", "Mean age of study population",sum$`Design factor`)
+sum$`Design factor` <- gsub("Engage", "",sum$`Design factor`)
+sum$`Design factor` <- gsub("GOS_how", "",sum$`Design factor`)
+sum$`Design factor` <- gsub("Severe", "Severe only",sum$`Design factor`)
+sum$`Design factor` <- gsub("CenterSingle", "Single-center study (vs multi-center)",sum$`Design factor`)
+sum$`Design factor` <- gsub("HDI", "Human development index of recruiting country",sum$`Design factor`)
+sum$`Design factor` <- gsub("_", " ",sum$`Design factor`)
+
+
+#making a pretty html version
+sum %>%
+  kable(escape = FALSE, row.names= FALSE) %>%
+  kable_styling(bootstrap_options = c("condensed", "striped"), full_width = F) %>%
+  pack_rows("Recruitment setting (compared to the hyperacute setting)", 14, 15) %>%
+  pack_rows("Level of non-routine engagement (compared to no such engagement)", 16, 18)%>%
+  pack_rows("Method of GOS collection (compared to collection exclusively in person)", 19, 20) %>%
+  pack_rows("Injury severity (compared to using patients of mixed severity)", 11,13 )
+
+sum_imp
+```
+
+
+# Visualise predictions using the first of 20 imputed datasets
+
+```{r}
+#fit the model on just the first of 20 imputed dataset, so that it can be plotted
+imp1 <- mice::complete(imp,1)
+fit.imp1 <- with(imp1, glm(cbind(MaxLost, MinRemain) ~ 
+                Tpoints + 
+                  Time + 
+                  IntObs + 
+                  RetroPro + 
+                  PrimSec + 
+                  Range + 
+                  Severity + 
+                  Center + 
+                  Setting + 
+                  Male + 
+                  Age + 
+                  Engage + 
+                  GOS_how + 
+                  HDI,
+             family = binomial))
+
+```
+
+
+```{r}
+#load packages required for plotting
+library("snakecase")
+library("ggeffects")
+library(ggplot2)
+```
+
+```{r}
+#Plot Attrition based on recruitment setting and injury severity
+mydf <- ggpredict(fit.imp1, c("Tpoints", "Severity", "Setting"))
+
+p1 <- ggplot(mydf, aes(x, exp(predicted), group = group)) + 
+  geom_point(aes(shape = group, colour = group), size = 4)+
+  geom_line(aes(colour = group)) +
+  geom_ribbon(aes(ymin = exp(conf.low), ymax = exp(conf.high)), alpha = .05)+
+  facet_grid(.~facet) +
+  theme_bw(base_size = 28) +
+  theme(legend.position = "bottom", plot.title = element_text(hjust = 0.5))+
+  labs(title= "Attrition based on recruitment setting and injury severity ", 
+       x="Number of follow-up timepoints", 
+       y ="Odds of attrition by end of study")+
+  #to combine legend for colour and shape into one
+  scale_colour_manual(name = "Injury severity",
+                      labels = c("mixed", "mild only", "moderate & severe", "severe only"),
+                      values = c("red", "green", "orange", "blue")) +
+  scale_shape_manual(name = "Injury severity",
+                      labels = c("mixed", "mild only", "moderate & severe", "severe only"),
+                     values = c(1, 2, 0, 3))
+
+p1
+```
+
+```{r}
+#Plot Attrition based on recruiting centers and method of GOS collection
+mydf <- ggpredict(fit.imp1, c("Tpoints", "Center", "GOS_how"))
+
+p2 <- ggplot(mydf, aes(x, exp(predicted), group = group)) + 
+  geom_point(aes(shape = group, colour = group), size = 4)+
+  geom_line(aes(colour = group)) +
+  geom_ribbon(aes(ymin = exp(conf.low), ymax = exp(conf.high)), alpha = .05)+
+  facet_grid(.~facet) +
+  theme_bw(base_size = 28) +
+  theme(legend.position = "bottom", plot.title = element_text(hjust = 0.5))+
+  labs(title= "Attrition based on recruiting centers and method of GOS collection", 
+       x="Number of follow-up timepoints", 
+       y ="Odds of attrition by end of study")+
+  #to combine legend for colour and shape into one
+  scale_colour_manual(name = "Single vs Multi-Center",
+                      labels = c("Multi-Center", "Single-Center"),
+                      values = c("blue", "red")) +
+  scale_shape_manual(name = "Single vs Multi-Center",
+                      labels = c("Multi-Center", "Single-Center"),
+                     values = c(0, 1))
+
+p2
+```
+
+
+
+```{r}
+#plot Attrition based on time since injury and nnumber of follow-up timepoints
+mydf <- ggpredict(fit.imp1, c("Time", "Tpoints"))
+
+p3 <- ggplot(mydf, aes(x*6, exp(predicted), group = group )) + 
+  geom_point(aes(shape = group, colour = group), size = 4)+
+  geom_line(aes(colour = group)) +
+  geom_ribbon(aes(ymin = exp(conf.low), ymax = exp(conf.high)), alpha = .05)+
+  theme_bw(base_size = 28) +
+  theme(legend.position = "right", plot.title = element_text(hjust = 0.5))+
+  labs(title= "Attrition based on time since injury and \nnumber of follow-up timepoints", 
+       x="Time since injury (months)", 
+       y ="Odds of attrition by end of study" )+
+  #to combine legend for colour and shape into one
+ scale_colour_manual(name = "Total no. of \nfollow-up \ntimepoints",
+                      labels = c("5", "4", "3", "2", "1"),
+                      values = c("orange", "red", "purple", "blue", "green"),
+                      limits = c("5", "4", "3", "2", "1")) +
+  scale_shape_manual(name = "Total no. of \nfollow-up \ntimepoints",
+                     labels = c("5", "4", "3", "2", "1"),
+                     values = c(0, 1, 2, 3, 4),
+                      limits = c("5", "4", "3", "2", "1"))
+
+```
+
+
+Save plots as images
+```{r}
+library(gridExtra)
+library(grid)
+
+tiff(file = "Richter.Fig2.tiff",
+    width = 1200,
+    height = 1200)
+grid.arrange(p1, p2, ncol=, nrow = 2)
+dev.off()
+
+tiff(file = "Richter.Fig3.tiff",
+    width = 1000,
+    height = 800)
+p3
+dev.off()
+```
+
+# Checking for multicolinearity
+
+```{r}
+#calculating the median variance inflation factor across all 20 imputed datasets
+col <- car::vif(fit.imp1) %>% as.data.frame()
+res <- data.frame(matrix(20,14))
+rownames(res) <- rownames(col)
+
+for (i in 1:20) {
+  data <- mice::complete(imp,i)
+  mdl <- with(data, glm(cbind(MaxLost, MinRemain) ~ 
+                Tpoints + 
+                  Time + 
+                  IntObs + 
+                  RetroPro + 
+                  PrimSec + 
+                  Range + 
+                  Severity + 
+                  Center + 
+                  Setting + 
+                  Male + 
+                  Age + 
+                  Engage + 
+                  GOS_how + 
+                  HDI,
+             family = binomial))
+  res[,i] <- car::vif(mdl) %>% data.frame %>% select('GVIF..1..2.Df..')
+}
+vif.df <- apply(res,1,median) %>% data.frame
+names(vif.df) <- "median_GVIFbyDF"
+vif.df <- round(vif.df,2)
+vif.df
+
+#Make a pretty version of the table
+vif.df %>%
+  kable(escape = FALSE, row.names= TRUE) %>%
+  kable_styling(bootstrap_options = c("condensed", "striped"), full_width = F)
+```
+
+# Assessing Model Fit
+
+```{r, include=TRUE}
+#I am estimating pseudoR squared for each of the 20 imputed models
+
+res <- vector()
+for (i in 1:20){
+data <- mice::complete(imp, i)
+mdl <- with(data, glm(cbind(MaxLost, MinRemain) ~ 
+                Tpoints + 
+                  Time + 
+                  IntObs + 
+                  RetroPro + 
+                  PrimSec + 
+                  Range + 
+                  Severity + 
+                  Center + 
+                  Setting + 
+                  Male + 
+                  Age + 
+                  Engage + 
+                  GOS_how + 
+                  HDI,
+             family = binomial))
+library(pscl)
+res[i] <- pR2(mdl)[4] %>% as.vector()
+}
+summary(res)
+```
+
+
+
+# Complete case analysis as sensitivity analysis
+```{r, include=TRUE}
+complete_model <- glm(cbind(MaxLost, MinRemain) ~ 
+                Tpoints + 
+                  Time + 
+                  IntObs + 
+                  RetroPro + 
+                  PrimSec + 
+                  Range + 
+                  Severity + 
+                  Center + 
+                  Setting + 
+                  Male + 
+                  Age + 
+                  Engage + 
+                  GOS_how + 
+                  HDI,
+             family = binomial,
+             df)
+
+# convert coefficients to odds ratios and add confidence intervals
+sum <- summary(complete_model)$coefficients %>% as.data.frame()
+sum$Estimate <- round(exp(sum$Estimate),2)
+sum$`Pr(>|z|)` <-round(sum$`Pr(>|z|)`,2)
+sum <- cbind(sum, confint(complete_model))
+sum
+
+#convert rownames to first column
+sum$design <- rownames(sum)
+#merge columns for confidence interval
+sum$`2.5 %` <- round(exp(sum$`2.5 %`),2)
+sum$`97.5 %` <- round(exp(sum$`97.5 %`),2)
+sum$CI <- paste(sum$`2.5 %`, "-", sum$`97.5 %`)
+
+sum$sig <- ifelse(sum$`2.5 %` < 1 & sum$`97.5 %` <1, "*", 
+                  ifelse(sum$`2.5 %` > 1 & sum$`97.5 %` > 1, "*", ""))
+#reorder and rename columns
+sum <- sum %>% 
+  select("Design factor" = design,
+                      "Odds ratio" = Estimate,
+                      "95% Confidence Interval" = CI,
+        "P-value" = 'Pr(>|z|)',
+                      "Significant" = sig) 
+
+sum <- sum[-1,] # remove intercepts
+
+myorder <-  c("Tpoints", "Time", "IntObsobservational", 
+              "RetroProRetrospective", "PrimSecSecondary",  "Rangeyes", 
+              "CenterSingle", "Male", "Age",  
+              "HDI" ,"SeverityMild", "SeverityModerate_to_severe", 
+              "SeveritySevere", "SettingAcute", "SettingSubacute",                                                  "EngageBaseline only", "EngageFollow-up only", "EngageBaseline and follow-up", 
+              "GOS_howPartially in person",   "GOS_howNot in person")         
+sum <- sum %>%
+  mutate(`Design factor` =  factor(`Design factor`, levels = myorder)) %>%
+  arrange(`Design factor`)
+
+#Editing column Design factor
+sum$`Design factor` <- gsub("Tpoints", "Total no. of follow-up timepoints",sum$`Design factor`)
+sum$`Design factor` <- gsub("Time", "Study duration (months)",sum$`Design factor`)
+sum$`Design factor` <- gsub("IntObsobservational", "Observational study (vs interventional)",sum$`Design factor`)
+sum$`Design factor` <- gsub("RetroProProspective", "Prospective study (vs retrospective)",sum$`Design factor`)
+sum$`Design factor` <- gsub("PrimSecSecondary", "GOS as secondary outcome (vs primary)",sum$`Design factor`)
+sum$`Design factor` <- gsub("Rangeyes", "Use of follow-up time window (vs discrete timepoints)",sum$`Design factor`)
+sum$`Design factor` <- gsub("Severity", "",sum$`Design factor`)
+sum$`Design factor` <- gsub("Setting", "",sum$`Design factor`)
+sum$`Design factor` <- gsub("Male", "Percentage of male patients",sum$`Design factor`)
+sum$`Design factor` <- gsub("Age", "Mean age of study population",sum$`Design factor`)
+sum$`Design factor` <- gsub("Engage", "",sum$`Design factor`)
+sum$`Design factor` <- gsub("GOS_how", "",sum$`Design factor`)
+sum$`Design factor` <- gsub("Severe", "Severe only",sum$`Design factor`)
+sum$`Design factor` <- gsub("CenterSingle", "Single-center study (vs multi-center)",sum$`Design factor`)
+sum$`Design factor` <- gsub("HDI", "Human development index of recruiting country",sum$`Design factor`)
+sum$`Design factor` <- gsub("_", " ",sum$`Design factor`)
+
+
+#making a pretty html version
+sum %>%
+  kable(escape = FALSE, row.names= FALSE) %>%
+  kable_styling(bootstrap_options = c("condensed", "striped"), full_width = F) %>%
+  pack_rows("Recruitment setting (compared to the hyperacute setting)", 14, 15) %>%
+  pack_rows("Level of non-routine engagement (compared to no such engagement)", 16, 18)%>%
+  pack_rows("Method of GOS collection (compared to collection exclusively in person)", 19, 20) %>%
+  pack_rows("Injury severity (compared to using patients of mixed severity)", 11,13 )
+
+```
+```{r}
+#compare complete case with imputed model
+diff <- as.data.frame(matrix(ncol=4,nrow=20))
+names(diff) <- c("design", "imp", "comp", "difference")
+diff$design <- sum$`Design factor`
+diff$imp <- sum_imp$`Odds ratio` 
+diff$comp <- sum$`Odds ratio`
+diff$difference <- (diff$imp - diff$comp)
+diff
+```
+
