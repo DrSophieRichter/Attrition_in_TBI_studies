@@ -1,15 +1,4 @@
----
-title: "Attrition paper"
-author: "Sophie Richter"
-date: "11 October 2019"
-output: html_document
----
-This is the code for our paper:  
-Richter, S., Stevenson, S., Newman, T., Wilson, L., Maas, A.I.R., Nieboer, D., Lingsma, H., Steyerberg, E., Newcombe, V., 2020. Study Design Features Associated with Patient Attrition in Studies of Traumatic Brain Injury — A Systematic Review 1–11. https://doi.org/10.1089/neu.2020.7000
-
-# Data preparation 
-
-```{r libraries, results='hide', message=FALSE, warning=FALSE}
+## ----libraries, results='hide', message=FALSE, warning=FALSE-----------------------------------------
 #loading required libraries
 library(magrittr)
 library(naniar)
@@ -19,10 +8,9 @@ library(forcats)
 library(knitr)
 library(kableExtra)
 library(tidyr)
-```
 
-Load data
-```{r}
+
+## ----------------------------------------------------------------------------------------------------
 #data collected for original review on the handling of missing data
 handling.df      <- read.csv("mt.df_20180726.csv") 
 #exclude study number 198 due to heterogeneous methodology
@@ -42,10 +30,9 @@ df <- merge(handling.df, design.df,
 df <- merge(df, hdi.df, by = "ID", all.x = TRUE, all.y = FALSE)
 df <- merge(df, engage.df, by = "ID")
 df <- merge(df, gose.df, by = c("ID", "GOS.assessment"))
-```
 
-Summarizing Age for each study
-```{r}
+
+## ----------------------------------------------------------------------------------------------------
 #making sure all NA are coded as such
 df$Age_mean <- ifelse(df$Age_mean %in% c("", " ", "not reported", "Not reported"), NA, as.numeric(as.character(df$Age_mean)))
 
@@ -61,10 +48,9 @@ fton <- function(factor_variable) {
   df$Age <- df %$% 
   ifelse(is.na(Age_mean), fton(Age_median), fton(Age_mean)) %>%
   round(0)
-```
 
-Select relevant columns i.e. those that refer to study design features rather than the way in which authors handled missing data statistically
-```{r}
+
+## ----------------------------------------------------------------------------------------------------
 #select only relevant columns and give them more succinct names
 df <- df %>% 
   select(ID, # study ID
@@ -91,10 +77,9 @@ df <- df %>%
          GOS2 = GOS.assessment, # how GOS was collected (fine categorisation)
          Proxy = Was.proxy.assessment.accepted., # whether a proxy report of GOS was accepted
          HDI)
-```
 
-At the moment the data is in the long format i.e. there are several rows for each study. Each row refers to the nth follow-up timepoint for that study. For the purposes of this review, we are only interested in the the maximum number of patients lost by the end study. So we will only select the row referring to the final timepoint for each study and calculate the maximum number of patients lost by that point.
-```{r}
+
+## ----------------------------------------------------------------------------------------------------
 #Recode Timepoint into a number (currently it's in the format "T1c", "T2c", "T3c" etc)
 df$Timepoint <- gsub("T", "", df$Timepoint)
 df$Timepoint <- gsub("c", "", df$Timepoint)
@@ -114,15 +99,13 @@ df$MinRemain <- ifelse(df$MinRemain == "-Inf", NA, as.numeric(df$MinRemain))
 
 #keep only one row per study, the one final timepoint
 df <-  df %>% filter(Timepoint == Tpoints)
-```
 
 
-```{r}
+## ----------------------------------------------------------------------------------------------------
 str(df)
-```
-For each design feature, we need to tidy up the levels
 
-```{r}
+
+## ----------------------------------------------------------------------------------------------------
 #Factorise ID
 df$ID <- as.factor(df$ID)
 
@@ -213,10 +196,9 @@ summary(df$Proxy)
 df$Military <- as.factor(df$Military)
 df$Military <- droplevels(df$Military)
 summary(df$Military)
-```
 
-# Make Table one
-```{r}
+
+## ----------------------------------------------------------------------------------------------------
 library(tableone)
 t1 <- df
 t1$Perc <- (df$MaxLost/df$N) *100
@@ -288,16 +270,14 @@ t1 %>%
   kable_styling(bootstrap_options = c("condensed", "striped"), full_width = F) %>%
   add_indent(c( 9:12, 17:19, 21:24, 29:31)) %>%
   add_header_above(c("Design factor" = 1,"Interventional studies" = 1 ,"Observational studies" = 1,  "Design factor not reported" = 1))
-```
 
 
-# Multiple imputation of missing data
-```{r}
+## ----------------------------------------------------------------------------------------------------
 set.seed(123) #ensure reproducible results
 library(mice)
-```
 
-```{r}
+
+## ----------------------------------------------------------------------------------------------------
 #Remove excessive variables especially ID
 df <- df %>% select(-ID,
                     -N,
@@ -310,74 +290,63 @@ df <- df %>% select(-ID,
 df$Time <- df$Time/6
 
 
-```
 
 
-```{r}
+## ----------------------------------------------------------------------------------------------------
 #Examine the pattern of missing data
 md.pattern(df)
-```
 
 
-```{r}
+## ----------------------------------------------------------------------------------------------------
 #view fluxplot
 fluxplot(df)
-```
 
 
-```{r}
+## ----------------------------------------------------------------------------------------------------
 #Making 1 imputed data set just to set up the methods
 imp <- mice(df, m=1, print = F) 
 #Show method of imputation used for each variable
 imp$meth
 
-```
 
 
-```{r}
+## ----------------------------------------------------------------------------------------------------
 #Change imputation method for continuous variables
 meth <- imp$meth
 meth[c("Age", "Male", "MaxLost", "MinRemain")] <- "midastouch"
 meth
-```
 
-```{r}
+
+## ----------------------------------------------------------------------------------------------------
 #Run the imputation again
 imp <- mice(df, m= 20, meth = meth, print = F)
-```
 
 
-```{r}
+## ----------------------------------------------------------------------------------------------------
 imp #shows how data was imputed i.e. method and which variables contributed (I used all variables)
-```
 
 
-
-```{r}
+## ----------------------------------------------------------------------------------------------------
 #Check for convergence of imputations
 plot(imp)
-```
 
 
-```{r}
+## ----------------------------------------------------------------------------------------------------
 #Check for plausibility on stripplots
 stripplot(imp)
-```
 
 
-```{r}
+## ----------------------------------------------------------------------------------------------------
 #check for plausibility on density plots
 densityplot(imp)
-```
-# Modelling the data
 
-Visualise the outcome variable
-```{r, include=TRUE}
+
+## ---- include=TRUE-----------------------------------------------------------------------------------
 hist(df$MaxLost, 100) #Absolute number of patients lost, disregarding study size
 hist(log(df$MaxLost/df$MinRemain), 10) #logit of patients lost to follow up, i.e. considers study size
-```
-Run the model
-```{r, include=TRUE}
+
+
+## ---- include=TRUE-----------------------------------------------------------------------------------
 #I am NOT using Proxy (75% missing and likely MNAR) and Military (too few studies are military) in the model
 imputed_model <- with(imp, 
                       glm(cbind(MaxLost, MinRemain) ~ 
@@ -396,10 +365,9 @@ imputed_model <- with(imp,
                   GOS_how + 
                   HDI,
              family = binomial))
-```
 
-Create a results table for model coefficients
-```{r, include=TRUE}
+
+## ---- include=TRUE-----------------------------------------------------------------------------------
 # log odds scale
 sum <- summary(pool(imputed_model), conf.int = TRUE, exponentiate = TRUE)
 sum[,-1] <- round(sum[,-1], 2)
@@ -463,12 +431,9 @@ sum %>%
   pack_rows("Injury severity (compared to using patients of mixed severity)", 11,13 )
 
 sum_imp
-```
 
 
-# Visualise predictions using the first of 20 imputed datasets
-
-```{r}
+## ----------------------------------------------------------------------------------------------------
 #fit the model on just the first of 20 imputed dataset, so that it can be plotted
 imp1 <- mice::complete(imp,1)
 fit.imp1 <- with(imp1, glm(cbind(MaxLost, MinRemain) ~ 
@@ -488,17 +453,16 @@ fit.imp1 <- with(imp1, glm(cbind(MaxLost, MinRemain) ~
                   HDI,
              family = binomial))
 
-```
 
 
-```{r}
+## ----------------------------------------------------------------------------------------------------
 #load packages required for plotting
 library("snakecase")
 library("ggeffects")
 library(ggplot2)
-```
 
-```{r}
+
+## ----------------------------------------------------------------------------------------------------
 #Plot Attrition based on recruitment setting and injury severity
 mydf <- ggpredict(fit.imp1, c("Tpoints", "Severity", "Setting"))
 
@@ -520,9 +484,9 @@ p1 <- ggplot(mydf, aes(x, exp(predicted), group = group)) +
                       labels = c("mixed", "mild only", "moderate & severe", "severe only"),
                      values = c(1, 2, 0, 3))
 
-```
 
-```{r}
+
+## ----------------------------------------------------------------------------------------------------
 #Plot Attrition based on recruiting centers and method of GOS collection
 mydf <- ggpredict(fit.imp1, c("Tpoints", "Center", "GOS_how"))
 
@@ -544,11 +508,9 @@ p2 <- ggplot(mydf, aes(x, exp(predicted), group = group)) +
                       labels = c("Multi-Center", "Single-Center"),
                      values = c(0, 1))
 
-```
 
 
-
-```{r}
+## ----------------------------------------------------------------------------------------------------
 #plot Attrition based on time since injury and nnumber of follow-up timepoints
 mydf <- ggpredict(fit.imp1, c("Time", "Tpoints"))
 
@@ -571,11 +533,9 @@ p3 <- ggplot(mydf, aes(x*6, exp(predicted), group = group )) +
                      values = c(0, 1, 2, 3, 4),
                       limits = c("5", "4", "3", "2", "1"))
 
-```
 
 
-Save plots as images
-```{r}
+## ----------------------------------------------------------------------------------------------------
 library(gridExtra)
 library(grid)
 
@@ -590,11 +550,9 @@ tiff(file = "Richter.Fig3.tiff",
     height = 800)
 p3
 dev.off()
-```
 
-# Checking for multicolinearity
 
-```{r}
+## ----------------------------------------------------------------------------------------------------
 #calculating the median variance inflation factor across all 20 imputed datasets
 col <- car::vif(fit.imp1) %>% as.data.frame()
 res <- data.frame(matrix(20,14))
@@ -629,11 +587,9 @@ vif.df
 vif.df %>%
   kable(escape = FALSE, row.names= TRUE) %>%
   kable_styling(bootstrap_options = c("condensed", "striped"), full_width = F)
-```
 
-# Assessing Model Fit
 
-```{r, include=TRUE}
+## ---- include=TRUE-----------------------------------------------------------------------------------
 #I am estimating pseudoR squared for each of the 20 imputed models
 
 res <- vector()
@@ -659,12 +615,9 @@ library(pscl)
 res[i] <- pR2(mdl)[4] %>% as.vector()
 }
 summary(res)
-```
 
 
-
-# Complete case analysis as sensitivity analysis
-```{r, include=TRUE}
+## ---- include=TRUE-----------------------------------------------------------------------------------
 complete_model <- glm(cbind(MaxLost, MinRemain) ~ 
                 Tpoints + 
                   Time + 
@@ -747,8 +700,8 @@ sum %>%
   pack_rows("Method of GOS collection (compared to collection exclusively in person)", 19, 20) %>%
   pack_rows("Injury severity (compared to using patients of mixed severity)", 11,13 )
 
-```
-```{r}
+
+## ----------------------------------------------------------------------------------------------------
 #compare complete case with imputed model
 diff <- as.data.frame(matrix(ncol=4,nrow=20))
 names(diff) <- c("design", "imp", "comp", "difference")
@@ -757,5 +710,4 @@ diff$imp <- sum_imp$`Odds ratio`
 diff$comp <- sum$`Odds ratio`
 diff$difference <- (diff$imp - diff$comp)
 diff
-```
 
