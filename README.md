@@ -6,5 +6,5 @@ Richter, S., Stevenson, S., Newman, T., Wilson, L., Maas, A.I.R., Nieboer, D., L
 We strive to maximise the quality and progress of research in traumatic brain injury, by making our work reproducible and openly available. You are free to re-use, alter and distribute this code under the MIT licence. If you do, please **cite the above paper**.
 
 To stay up to date with our research, please  
-visit https://www.tbiresearch.co.uk/ or
+visit https://www.tbiresearch.co.uk/ or   
 follow @DrSophieRichter and @vfjn2 on twitter
